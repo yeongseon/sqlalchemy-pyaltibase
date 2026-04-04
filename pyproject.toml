@@ -3,7 +3,7 @@ requires = ["setuptools>=65.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sqlalchemy-altibase"
+name = "sqlalchemy-pyaltibase"
 version = "0.1.0"
 description = "Altibase dialect for SQLAlchemy"
 readme = "README.md"
@@ -42,9 +42,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yeongseon/sqlalchemy-altibase"
-Repository = "https://github.com/yeongseon/sqlalchemy-altibase"
-Issues = "https://github.com/yeongseon/sqlalchemy-altibase/issues"
+Homepage = "https://github.com/yeongseon/sqlalchemy-pyaltibase"
+Repository = "https://github.com/yeongseon/sqlalchemy-pyaltibase"
+Issues = "https://github.com/yeongseon/sqlalchemy-pyaltibase/issues"
 
 [project.entry-points."sqlalchemy.dialects"]
 altibase = "sqlalchemy_altibase.dialect:AltibaseDialect"

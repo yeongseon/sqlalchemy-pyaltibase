@@ -1,21 +1,21 @@
-# sqlalchemy-altibase
+# sqlalchemy-pyaltibase
 
-[![PyPI version](https://img.shields.io/pypi/v/sqlalchemy-altibase)](https://pypi.org/project/sqlalchemy-altibase)
-[![CI](https://github.com/yeongseon/sqlalchemy-altibase/actions/workflows/ci.yml/badge.svg)](https://github.com/yeongseon/sqlalchemy-altibase/actions/workflows/ci.yml)
-[![license](https://img.shields.io/github/license/yeongseon/sqlalchemy-altibase)](https://github.com/yeongseon/sqlalchemy-altibase/blob/main/LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/sqlalchemy-pyaltibase)](https://pypi.org/project/sqlalchemy-pyaltibase)
+[![CI](https://github.com/yeongseon/sqlalchemy-pyaltibase/actions/workflows/ci.yml/badge.svg)](https://github.com/yeongseon/sqlalchemy-pyaltibase/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/yeongseon/sqlalchemy-pyaltibase)](https://github.com/yeongseon/sqlalchemy-pyaltibase/blob/main/LICENSE)
 
 SQLAlchemy 2.0 dialect for the Altibase database, backed by `pyaltibase`.
 
 ## Installation
 
 ```bash
-pip install sqlalchemy-altibase
+pip install sqlalchemy-pyaltibase
 ```
 
 With DB-API dependency:
 
 ```bash
-pip install "sqlalchemy-altibase[pyaltibase]"
+pip install "sqlalchemy-pyaltibase[pyaltibase]"
 ```
 
 ## Quick Start
