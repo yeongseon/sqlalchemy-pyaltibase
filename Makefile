@@ -3,7 +3,7 @@ RUFF = ruff
 SRC = sqlalchemy_altibase
 TESTS = test
 
-.PHONY: lint format test clean
+.PHONY: lint format test test-e2e-docker clean
 
 lint:
 	$(RUFF) check $(SRC)/ $(TESTS)/
@@ -18,6 +18,9 @@ test:
 		--cov=$(SRC) \
 		--cov-report=term-missing \
 		--cov-fail-under=95
+
+test-e2e-docker:
+	docker compose -f docker-compose.e2e.yml up --build --abort-on-container-exit --exit-code-from e2e
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache/ .coverage .ruff_cache/ __pycache__/

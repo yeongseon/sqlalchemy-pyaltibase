@@ -226,7 +226,7 @@ class AltibaseDialect(default.DefaultDialect):
         self.set_isolation_level(dbapi_conn, "READ COMMITTED")
 
     def _get_server_version_info(self, connection):
-        version = connection.execute(text("SELECT PRODUCT_SIGNATURE FROM V$VERSION")).scalar()
+        version = connection.execute(text("SELECT PRODUCT_VERSION FROM V$VERSION")).scalar()
         if version is None:
             return None
         match = _RE_VERSION.search(str(version))

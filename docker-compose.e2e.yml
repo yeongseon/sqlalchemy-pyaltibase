@@ -1,0 +1,29 @@
+services:
+  db:
+    image: ${ALTIBASE_IMAGE:-altibase/a_plus_edition:latest}
+    hostname: ${ALTIBASE_HOSTNAME:-altibase}
+    ports:
+      - "${ALTIBASE_PORT:-20300}:20300"
+    environment:
+      MODE: foreground
+      DB_SIZE: "${ALTIBASE_DB_SIZE:-500}"
+      DB_CHARSET: "${ALTIBASE_DB_CHARSET:-UTF8}"
+      NATIONAL_CHARSET: "${ALTIBASE_NATIONAL_CHARSET:-UTF8}"
+
+  e2e:
+    build:
+      context: .
+      dockerfile: docker/e2e.Dockerfile
+      args:
+        BASE_IMAGE: ${ALTIBASE_IMAGE:-altibase/a_plus_edition:latest}
+    depends_on:
+      - db
+    environment:
+      SA_ALTIBASE_RUN_E2E: "1"
+      SA_ALTIBASE_HOST: db
+      SA_ALTIBASE_PORT: "${ALTIBASE_PORT:-20300}"
+      SA_ALTIBASE_DATABASE: ${ALTIBASE_DATABASE:-mydb}
+      SA_ALTIBASE_USER: ${ALTIBASE_USER:-sys}
+      SA_ALTIBASE_PASSWORD: ${ALTIBASE_PASSWORD:-manager}
+      SA_ALTIBASE_DRIVER: ${ALTIBASE_DRIVER:-ALTIBASE_HDB_ODBC_64bit}
+      SA_ALTIBASE_NLS_USE: ${ALTIBASE_NLS_USE:-UTF8}
