@@ -148,7 +148,43 @@ class AltibaseExecutionContext(default.DefaultExecutionContext):
         return AUTOCOMMIT_REGEXP.match(statement)
 
     def get_lastrowid(self):
+        lastrowid = getattr(self.cursor, "lastrowid", None)
+        if lastrowid is not None:
+            return lastrowid
+
+        if self.compiled is None or not hasattr(self.compiled, "statement"):
+            return None
+
+        statement = self.compiled.statement
+        if statement is None or not hasattr(statement, "table"):
+            return None
+
+        table = statement.table
+        col = table._autoincrement_column
+        if col is None or col.server_default is not None:
+            return None
+
+        from sqlalchemy_altibase.compiler import autoinc_seq_name
+
+        seq = autoinc_seq_name(table.name, col.name)
         try:
-            return self.cursor.lastrowid
+            self.cursor.execute(f"SELECT {seq}.CURRVAL FROM DUAL")
+            row = self.cursor.fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
+
+        table = self.compiled.statement.table
+        col = table._autoincrement_column
+        if col is None or col.server_default is not None:
+            return None
+
+        from sqlalchemy_altibase.compiler import autoinc_seq_name
+
+        seq = autoinc_seq_name(table.name, col.name)
+        try:
+            self.cursor.execute(f"SELECT {seq}.CURRVAL FROM DUAL")
+            row = self.cursor.fetchone()
+            return row[0] if row else None
         except Exception:
             return None

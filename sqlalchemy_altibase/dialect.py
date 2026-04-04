@@ -3,13 +3,19 @@ from __future__ import annotations
 
 import re
 
-from sqlalchemy import types as sqltypes
+import sqlalchemy as sa
+from sqlalchemy import event, types as sqltypes
 from sqlalchemy import util
 from sqlalchemy.engine import default, reflection
 from sqlalchemy.sql import text
 
 from sqlalchemy_altibase.base import AltibaseExecutionContext, AltibaseIdentifierPreparer
-from sqlalchemy_altibase.compiler import AltibaseCompiler, AltibaseDDLCompiler, AltibaseTypeCompiler
+from sqlalchemy_altibase.compiler import (
+    AltibaseCompiler,
+    AltibaseDDLCompiler,
+    AltibaseTypeCompiler,
+    autoinc_seq_name,
+)
 from sqlalchemy_altibase.types import (
     BIGINT,
     BIT,
@@ -372,7 +378,7 @@ class AltibaseDialect(default.DefaultDialect):
                 return type_cls(length=int(data_precision))
             return type_cls()
 
-        if base_type in {"NUMERIC", "DECIMAL", "FLOAT"}:
+        if base_type in {"NUMERIC", "DECIMAL"}:
             if precision_match:
                 precision = int(precision_match.group(1))
                 scale = precision_match.group(2)
@@ -385,6 +391,13 @@ class AltibaseDialect(default.DefaultDialect):
                 return type_cls(precision=int(data_precision))
             return type_cls()
 
+        if base_type == "FLOAT":
+            if precision_match:
+                return type_cls(precision=int(precision_match.group(1)))
+            if data_precision is not None:
+                return type_cls(precision=int(data_precision))
+            return type_cls()
+
         return type_cls() if callable(type_cls) else type_cls
 
     @reflection.cache
@@ -392,14 +405,16 @@ class AltibaseDialect(default.DefaultDialect):
         effective = self._effective_schema(connection, schema)
         result = connection.execute(
             text(
-                "SELECT C.CONSTRAINT_NAME, CC.COLUMN_NAME "
+                "SELECT C.CONSTRAINT_NAME, COL.COLUMN_NAME "
                 "FROM SYSTEM_.SYS_CONSTRAINTS_ C "
                 "JOIN SYSTEM_.SYS_CONSTRAINT_COLUMNS_ CC ON C.CONSTRAINT_ID = CC.CONSTRAINT_ID "
+                "JOIN SYSTEM_.SYS_COLUMNS_ COL ON CC.COLUMN_ID = COL.COLUMN_ID "
+                "AND CC.TABLE_ID = COL.TABLE_ID "
                 "JOIN SYSTEM_.SYS_TABLES_ T ON C.TABLE_ID = T.TABLE_ID "
                 "JOIN SYSTEM_.SYS_USERS_ U ON T.USER_ID = U.USER_ID "
                 "WHERE U.USER_NAME = :schema AND T.TABLE_NAME = :table "
-                "AND C.CONSTRAINT_TYPE IN (0, 'PRIMARY KEY') "
-                "ORDER BY CC.COLUMN_ORDER"
+                "AND C.CONSTRAINT_TYPE = 3 "
+                "ORDER BY CC.CONSTRAINT_COL_ORDER"
             ),
             {"schema": effective, "table": table_name.upper()},
         )
@@ -414,54 +429,94 @@ class AltibaseDialect(default.DefaultDialect):
     @reflection.cache
     def get_foreign_keys(self, connection, table_name, schema=None, **kw):
         effective = self._effective_schema(connection, schema)
-        result = connection.execute(
+        fk_result = connection.execute(
             text(
-                "SELECT C.CONSTRAINT_NAME, CC.COLUMN_NAME, RT.TABLE_NAME AS REF_TABLE, "
-                "RCC.COLUMN_NAME AS REF_COLUMN, RU.USER_NAME AS REF_OWNER "
+                "SELECT C.CONSTRAINT_ID, C.CONSTRAINT_NAME, "
+                "C.REFERENCED_TABLE_ID, C.REFERENCED_INDEX_ID "
                 "FROM SYSTEM_.SYS_CONSTRAINTS_ C "
-                "JOIN SYSTEM_.SYS_CONSTRAINT_COLUMNS_ CC ON C.CONSTRAINT_ID = CC.CONSTRAINT_ID "
-                "JOIN SYSTEM_.SYS_CONSTRAINTS_ RC ON C.REF_CONSTRAINT_ID = RC.CONSTRAINT_ID "
-                "JOIN SYSTEM_.SYS_CONSTRAINT_COLUMNS_ RCC ON RC.CONSTRAINT_ID = RCC.CONSTRAINT_ID "
-                "AND CC.COLUMN_ORDER = RCC.COLUMN_ORDER "
                 "JOIN SYSTEM_.SYS_TABLES_ T ON C.TABLE_ID = T.TABLE_ID "
                 "JOIN SYSTEM_.SYS_USERS_ U ON T.USER_ID = U.USER_ID "
-                "JOIN SYSTEM_.SYS_TABLES_ RT ON RC.TABLE_ID = RT.TABLE_ID "
-                "JOIN SYSTEM_.SYS_USERS_ RU ON RT.USER_ID = RU.USER_ID "
                 "WHERE U.USER_NAME = :schema AND T.TABLE_NAME = :table "
-                "AND C.CONSTRAINT_TYPE IN (1, 'FOREIGN KEY') "
-                "ORDER BY C.CONSTRAINT_NAME, CC.COLUMN_ORDER"
+                "AND C.CONSTRAINT_TYPE = 0 "
+                "ORDER BY C.CONSTRAINT_NAME"
             ),
             {"schema": effective, "table": table_name.upper()},
         )
-        by_name = {}
-        for row in result:
-            name = row[0]
-            item = by_name.setdefault(
-                name,
-                {
-                    "name": name,
-                    "constrained_columns": [],
-                    "referred_schema": row[4],
-                    "referred_table": row[2],
-                    "referred_columns": [],
-                },
+        fk_rows = list(fk_result)
+        if not fk_rows:
+            return []
+
+        fkeys = []
+        for fk_row in fk_rows:
+            constraint_id = fk_row[0]
+            constraint_name = fk_row[1]
+            ref_table_id = fk_row[2]
+            ref_index_id = fk_row[3]
+
+            col_result = connection.execute(
+                text(
+                    "SELECT COL.COLUMN_NAME "
+                    "FROM SYSTEM_.SYS_CONSTRAINT_COLUMNS_ CC "
+                    "JOIN SYSTEM_.SYS_COLUMNS_ COL ON CC.COLUMN_ID = COL.COLUMN_ID "
+                    "AND CC.TABLE_ID = COL.TABLE_ID "
+                    "WHERE CC.CONSTRAINT_ID = :cid "
+                    "ORDER BY CC.CONSTRAINT_COL_ORDER"
+                ),
+                {"cid": constraint_id},
             )
-            item["constrained_columns"].append(row[1])
-            item["referred_columns"].append(row[3])
-        return list(by_name.values())
+            constrained_columns = [r[0] for r in col_result]
+
+            ref_result = connection.execute(
+                text(
+                    "SELECT T.TABLE_NAME, U.USER_NAME "
+                    "FROM SYSTEM_.SYS_TABLES_ T "
+                    "JOIN SYSTEM_.SYS_USERS_ U ON T.USER_ID = U.USER_ID "
+                    "WHERE T.TABLE_ID = :tid"
+                ),
+                {"tid": ref_table_id},
+            )
+            ref_row = ref_result.fetchone()
+            ref_table = ref_row[0] if ref_row else None
+            ref_schema = ref_row[1] if ref_row else None
+
+            ref_col_result = connection.execute(
+                text(
+                    "SELECT COL.COLUMN_NAME "
+                    "FROM SYSTEM_.SYS_INDEX_COLUMNS_ IC "
+                    "JOIN SYSTEM_.SYS_COLUMNS_ COL ON IC.COLUMN_ID = COL.COLUMN_ID "
+                    "AND IC.TABLE_ID = COL.TABLE_ID "
+                    "WHERE IC.INDEX_ID = :iid "
+                    "ORDER BY IC.INDEX_COL_ORDER"
+                ),
+                {"iid": ref_index_id},
+            )
+            referred_columns = [r[0] for r in ref_col_result]
+
+            fkeys.append(
+                {
+                    "name": constraint_name,
+                    "constrained_columns": constrained_columns,
+                    "referred_schema": ref_schema,
+                    "referred_table": ref_table,
+                    "referred_columns": referred_columns,
+                }
+            )
+        return fkeys
 
     @reflection.cache
     def get_indexes(self, connection, table_name, schema=None, **kw):
         effective = self._effective_schema(connection, schema)
         result = connection.execute(
             text(
-                "SELECT I.INDEX_NAME, I.IS_UNIQUE, IC.COLUMN_NAME, IC.COLUMN_ORDER "
+                "SELECT I.INDEX_NAME, I.IS_UNIQUE, COL.COLUMN_NAME "
                 "FROM SYSTEM_.SYS_INDICES_ I "
                 "JOIN SYSTEM_.SYS_INDEX_COLUMNS_ IC ON I.INDEX_ID = IC.INDEX_ID "
+                "JOIN SYSTEM_.SYS_COLUMNS_ COL ON IC.COLUMN_ID = COL.COLUMN_ID "
+                "AND IC.TABLE_ID = COL.TABLE_ID "
                 "JOIN SYSTEM_.SYS_TABLES_ T ON I.TABLE_ID = T.TABLE_ID "
                 "JOIN SYSTEM_.SYS_USERS_ U ON T.USER_ID = U.USER_ID "
                 "WHERE U.USER_NAME = :schema AND T.TABLE_NAME = :table "
-                "ORDER BY I.INDEX_NAME, IC.COLUMN_ORDER"
+                "ORDER BY I.INDEX_NAME, IC.INDEX_COL_ORDER"
             ),
             {"schema": effective, "table": table_name.upper()},
         )
@@ -567,6 +622,38 @@ class AltibaseDialect(default.DefaultDialect):
             return True
         finally:
             cursor.close()
+
+
+def _get_autoinc_column(table):
+    col = table._autoincrement_column
+    if col is not None and col.server_default is None:
+        return col
+    return None
+
+
+@event.listens_for(sa.Table, "before_create")
+def _create_implicit_sequences(target, connection, **kw):
+    if connection.dialect.name != "altibase":
+        return
+    col = _get_autoinc_column(target)
+    if col is None:
+        return
+    seq = autoinc_seq_name(target.name, col.name)
+    connection.execute(text(f"CREATE SEQUENCE {seq} START WITH 1 INCREMENT BY 1"))
+
+
+@event.listens_for(sa.Table, "after_drop")
+def _drop_implicit_sequences(target, connection, **kw):
+    if connection.dialect.name != "altibase":
+        return
+    col = _get_autoinc_column(target)
+    if col is None:
+        return
+    seq = autoinc_seq_name(target.name, col.name)
+    try:
+        connection.execute(text(f"DROP SEQUENCE {seq}"))
+    except Exception:
+        pass
 
 
 dialect = AltibaseDialect

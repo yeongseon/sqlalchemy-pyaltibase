@@ -5,6 +5,10 @@ from sqlalchemy.sql import compiler
 from sqlalchemy.sql import sqltypes
 
 
+def autoinc_seq_name(table_name, column_name):
+    return f"{table_name}_{column_name}_SEQ"
+
+
 class AltibaseCompiler(compiler.SQLCompiler):
     def visit_sysdate_func(self, fn, **kw):
         return "SYSDATE"
@@ -59,13 +63,25 @@ class AltibaseCompiler(compiler.SQLCompiler):
         offset_clause = select._offset_clause
         if limit_clause is None and offset_clause is None:
             return ""
+
+        # Altibase OFFSET is 1-based (OFFSET 1 = first row).
+        # SQLAlchemy uses 0-based, so always emit (offset + 1).
+        has_offset = offset_clause is not None
+
+        if has_offset:
+            offset_expr = "(%s + 1)" % self.process(offset_clause, **kw)
+        else:
+            offset_expr = None
+
         if limit_clause is None:
-            return "\n LIMIT 9223372036854775807 OFFSET %s" % self.process(offset_clause, **kw)
-        if offset_clause is None:
+            if offset_expr is None:
+                return ""
+            return "\n LIMIT 9223372036854775807 OFFSET %s" % offset_expr
+        if offset_expr is None:
             return "\n LIMIT %s" % self.process(limit_clause, **kw)
         return "\n LIMIT %s OFFSET %s" % (
             self.process(limit_clause, **kw),
-            self.process(offset_clause, **kw),
+            offset_expr,
         )
 
 
@@ -73,23 +89,26 @@ class AltibaseDDLCompiler(compiler.DDLCompiler):
     def get_column_specification(self, column, **kw):
         colspec = [self.preparer.format_column(column)]
 
-        if (
+        is_autoinc = (
             column.table is not None
             and column is column.table._autoincrement_column
             and column.server_default is None
-        ):
-            colspec.append("SERIAL")
+        )
+
+        if is_autoinc:
+            colspec.append("INTEGER")
+            seq_name = autoinc_seq_name(column.table.name, column.name)
+            colspec.append(f"DEFAULT {seq_name}.NEXTVAL")
         else:
             colspec.append(
                 self.dialect.type_compiler_instance.process(column.type, type_expression=column)
             )
+            default = self.get_column_default_string(column)
+            if default is not None:
+                colspec.append("DEFAULT " + default)
 
         if not column.nullable:
             colspec.append("NOT NULL")
-
-        default = self.get_column_default_string(column)
-        if default is not None:
-            colspec.append("DEFAULT " + default)
 
         return " ".join(colspec)
 

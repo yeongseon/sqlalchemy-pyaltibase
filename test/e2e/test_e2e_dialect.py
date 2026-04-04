@@ -336,7 +336,7 @@ class TestORM(unittest.TestCase):
         cls.Base.metadata.drop_all(cls.engine)
         cls.engine.dispose()
 
-    def test_orm_insert_and_query(self) -> None:
+    def test_01_orm_insert_and_query(self) -> None:
         with Session(self.engine) as session:
             session.add(self.User(username="alice", email="alice@test.com"))
             session.add(self.User(username="bob", email="bob@test.com"))
@@ -348,7 +348,7 @@ class TestORM(unittest.TestCase):
             self.assertEqual(users[0].username, "alice")
             self.assertEqual(users[1].username, "bob")
 
-    def test_orm_update(self) -> None:
+    def test_02_orm_update(self) -> None:
         with Session(self.engine) as session:
             user = session.query(self.User).filter_by(username="alice").first()
             self.assertIsNotNone(user)
@@ -359,7 +359,7 @@ class TestORM(unittest.TestCase):
             user = session.query(self.User).filter_by(username="alice").first()
             self.assertEqual(user.email, "alice_new@test.com")
 
-    def test_orm_delete(self) -> None:
+    def test_03_orm_delete(self) -> None:
         with Session(self.engine) as session:
             user = session.query(self.User).filter_by(username="bob").first()
             self.assertIsNotNone(user)

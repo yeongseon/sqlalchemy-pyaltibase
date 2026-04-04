@@ -7,10 +7,16 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from sqlalchemy import Column, Integer, MetaData, String, Table
 from sqlalchemy.engine import url
 
 from sqlalchemy_altibase.base import AltibaseExecutionContext
-from sqlalchemy_altibase.dialect import AltibaseDialect
+from sqlalchemy_altibase.dialect import (
+    AltibaseDialect,
+    _create_implicit_sequences,
+    _drop_implicit_sequences,
+    _get_autoinc_column,
+)
 
 
 def _invoke_reflection(dialect, method_name, connection, *args, **kwargs):
@@ -212,14 +218,33 @@ class TestReflectionMethods:
         conn = MagicMock()
         conn.info_cache = {}
         conn.dialect_options = {}
-        conn.execute.return_value = [
-            ("FK_ORDERS_USERS", "USER_ID", "USERS", "ID", "APP"),
-            ("FK_ORDERS_USERS", "TENANT_ID", "USERS", "TENANT_ID", "APP"),
+
+        fk_rows = [(101, "FK_ORDERS_USERS", 200, 300)]
+        col_rows = [("USER_ID",), ("TENANT_ID",)]
+        ref_table_row = MagicMock(fetchone=lambda: ("USERS", "APP"))
+        ref_col_rows = [("ID",), ("TENANT_ID",)]
+
+        conn.execute.side_effect = [
+            fk_rows,
+            col_rows,
+            ref_table_row,
+            ref_col_rows,
         ]
         fks = _invoke_reflection(d, "get_foreign_keys", conn, "ORDERS", schema="APP")
         assert fks[0]["name"] == "FK_ORDERS_USERS"
         assert fks[0]["constrained_columns"] == ["USER_ID", "TENANT_ID"]
         assert fks[0]["referred_columns"] == ["ID", "TENANT_ID"]
+        assert fks[0]["referred_table"] == "USERS"
+        assert fks[0]["referred_schema"] == "APP"
+
+    def test_get_foreign_keys_empty(self):
+        d = AltibaseDialect()
+        conn = MagicMock()
+        conn.info_cache = {}
+        conn.dialect_options = {}
+        conn.execute.return_value = []
+        fks = _invoke_reflection(d, "get_foreign_keys", conn, "ORDERS", schema="APP")
+        assert fks == []
 
     def test_get_table_names_and_views_and_definition(self):
         d = AltibaseDialect()
@@ -262,8 +287,8 @@ class TestReflectionMethods:
         conn.dialect_options = {}
         conn.execute.side_effect = [
             [
-                ("IX_USERS_NAME", "N", "NAME", 1),
-                ("UX_USERS_EMAIL", "Y", "EMAIL", 1),
+                ("IX_USERS_NAME", "N", "NAME"),
+                ("UX_USERS_EMAIL", "Y", "EMAIL"),
             ],
             MagicMock(fetchone=lambda: ("User table",)),
             [("APP",), ("SYS",)],
@@ -327,7 +352,43 @@ class TestPostfetchLastRowId:
         assert AltibaseDialect.postfetch_lastrowid is True
         ctx = object.__new__(AltibaseExecutionContext)
         ctx.cursor = MagicMock(lastrowid=55)
+        ctx.compiled = None
         assert ctx.get_lastrowid() == 55
+
+    def test_lastrowid_currval_fallback(self):
+        ctx = object.__new__(AltibaseExecutionContext)
+        ctx.cursor = MagicMock(lastrowid=None)
+        ctx.cursor.fetchone.return_value = (42,)
+
+        m = MetaData()
+        t = Table("t", m, Column("id", Integer, primary_key=True, autoincrement=True))
+        compiled = MagicMock()
+        compiled.statement = MagicMock()
+        compiled.statement.table = t
+        ctx.compiled = compiled
+
+        result = ctx.get_lastrowid()
+        assert result == 42
+        ctx.cursor.execute.assert_called_once()
+
+    def test_lastrowid_no_compiled(self):
+        ctx = object.__new__(AltibaseExecutionContext)
+        ctx.cursor = MagicMock(lastrowid=None)
+        ctx.compiled = None
+        assert ctx.get_lastrowid() is None
+
+    def test_lastrowid_no_autoincrement(self):
+        ctx = object.__new__(AltibaseExecutionContext)
+        ctx.cursor = MagicMock(lastrowid=None)
+
+        m = MetaData()
+        t = Table("t", m, Column("id", Integer, primary_key=True, autoincrement=False))
+        compiled = MagicMock()
+        compiled.statement = MagicMock()
+        compiled.statement.table = t
+        ctx.compiled = compiled
+
+        assert ctx.get_lastrowid() is None
 
 
 class TestDisconnectMessages:
@@ -351,3 +412,165 @@ class TestVersionAndSchemaQueries:
 
         conn.execute.return_value = MagicMock(scalar=lambda: "APP")
         assert d._get_default_schema_name(conn) == "APP"
+
+
+class TestResolveColumnTypeExtended:
+    def test_float_without_scale(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("FLOAT", 38, 0)
+        assert col.__class__.__name__ == "FLOAT"
+        assert col.precision == 38
+
+    def test_float_no_precision(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("FLOAT", None, None)
+        assert col.__class__.__name__ == "FLOAT"
+
+    def test_float_with_inline_precision(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("FLOAT(24)", None, None)
+        assert col.__class__.__name__ == "FLOAT"
+        assert col.precision == 24
+
+    def test_numeric_with_precision_and_scale(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("NUMERIC", 10, 2)
+        assert col.__class__.__name__ == "NUMERIC"
+        assert col.precision == 10
+        assert col.scale == 2
+
+    def test_numeric_inline_precision_only(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("NUMERIC(12)", None, None)
+        assert col.__class__.__name__ == "NUMERIC"
+        assert col.precision == 12
+
+    def test_numeric_inline_precision_and_scale(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("NUMERIC(10, 3)", None, None)
+        assert col.__class__.__name__ == "NUMERIC"
+        assert col.precision == 10
+        assert col.scale == 3
+
+    def test_numeric_no_args(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("NUMERIC", None, None)
+        assert col.__class__.__name__ == "NUMERIC"
+
+    def test_numeric_precision_only_from_metadata(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("NUMERIC", 8, None)
+        assert col.__class__.__name__ == "NUMERIC"
+        assert col.precision == 8
+
+    def test_varchar_inline_length(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("VARCHAR(200)", None, None)
+        assert col.__class__.__name__ == "VARCHAR"
+        assert col.length == 200
+
+    def test_varchar_bare(self):
+        d = AltibaseDialect()
+        col = d._resolve_column_type("VARCHAR", None, None)
+        assert col.__class__.__name__ == "VARCHAR"
+
+
+class TestImplicitSequenceEvents:
+    def test_get_autoinc_column_with_autoincrement(self):
+        m = MetaData()
+        t = Table("t", m, Column("id", Integer, primary_key=True, autoincrement=True))
+        assert _get_autoinc_column(t) is t.c.id
+
+    def test_get_autoinc_column_no_autoincrement(self):
+        m = MetaData()
+        t = Table("t", m, Column("id", Integer, primary_key=True, autoincrement=False))
+        assert _get_autoinc_column(t) is None
+
+    def test_get_autoinc_column_with_server_default(self):
+        m = MetaData()
+        t = Table(
+            "t",
+            m,
+            Column("id", Integer, primary_key=True, autoincrement=True, server_default="1"),
+        )
+        assert _get_autoinc_column(t) is None
+
+    def test_create_sequence_event_altibase(self):
+        m = MetaData()
+        t = Table(
+            "users",
+            m,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("name", String(50)),
+        )
+        conn = MagicMock()
+        conn.dialect = MagicMock(name="altibase")
+        conn.dialect.name = "altibase"
+        _create_implicit_sequences(t, conn)
+        conn.execute.assert_called_once()
+        sql_arg = str(conn.execute.call_args[0][0])
+        assert "CREATE SEQUENCE users_id_SEQ" in sql_arg
+
+    def test_create_sequence_event_skips_non_altibase(self):
+        m = MetaData()
+        t = Table(
+            "users",
+            m,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+        )
+        conn = MagicMock()
+        conn.dialect = MagicMock()
+        conn.dialect.name = "sqlite"
+        _create_implicit_sequences(t, conn)
+        conn.execute.assert_not_called()
+
+    def test_create_sequence_event_skips_no_autoincrement(self):
+        m = MetaData()
+        t = Table("users", m, Column("id", Integer, primary_key=True, autoincrement=False))
+        conn = MagicMock()
+        conn.dialect = MagicMock()
+        conn.dialect.name = "altibase"
+        _create_implicit_sequences(t, conn)
+        conn.execute.assert_not_called()
+
+    def test_drop_sequence_event_altibase(self):
+        m = MetaData()
+        t = Table(
+            "users",
+            m,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+            Column("name", String(50)),
+        )
+        conn = MagicMock()
+        conn.dialect = MagicMock()
+        conn.dialect.name = "altibase"
+        _drop_implicit_sequences(t, conn)
+        conn.execute.assert_called_once()
+        sql_arg = str(conn.execute.call_args[0][0])
+        assert "DROP SEQUENCE users_id_SEQ" in sql_arg
+
+    def test_drop_sequence_event_skips_non_altibase(self):
+        m = MetaData()
+        t = Table(
+            "users",
+            m,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+        )
+        conn = MagicMock()
+        conn.dialect = MagicMock()
+        conn.dialect.name = "postgresql"
+        _drop_implicit_sequences(t, conn)
+        conn.execute.assert_not_called()
+
+    def test_drop_sequence_event_ignores_error(self):
+        m = MetaData()
+        t = Table(
+            "users",
+            m,
+            Column("id", Integer, primary_key=True, autoincrement=True),
+        )
+        conn = MagicMock()
+        conn.dialect = MagicMock()
+        conn.dialect.name = "altibase"
+        conn.execute.side_effect = RuntimeError("sequence not found")
+        _drop_implicit_sequences(t, conn)

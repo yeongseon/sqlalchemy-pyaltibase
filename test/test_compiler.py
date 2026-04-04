@@ -59,10 +59,19 @@ class TestSelectCompilation:
         assert "SELECT" in _compile(select(users))
         assert "DISTINCT" in _compile(select(users.c.name).distinct())
         assert "LIMIT 10" in _compile(select(users).limit(10))
-        assert "LIMIT 9223372036854775807 OFFSET 5" in _compile(select(users).offset(5))
-        assert "LIMIT 10 OFFSET 5" in _compile(select(users).offset(5).limit(10))
+        assert "LIMIT 9223372036854775807 OFFSET (5 + 1)" in _compile(select(users).offset(5))
+        assert "LIMIT 10 OFFSET (5 + 1)" in _compile(select(users).offset(5).limit(10))
         assert _compile(select(users).with_for_update()).strip().endswith("FOR UPDATE")
         assert "FOR UPDATE OF" in _compile(select(users).with_for_update(of=[users.c.id]))
+
+    def test_limit_with_offset_zero(self):
+        sql = _compile(select(users).limit(10).offset(0))
+        assert "LIMIT 10" in sql
+        assert "OFFSET (0 + 1)" in sql
+
+    def test_offset_zero_only(self):
+        sql = _compile(select(users).offset(0))
+        assert "LIMIT 9223372036854775807 OFFSET (0 + 1)" in sql
 
     def test_for_update_nowait(self):
         sql = _compile(select(users).with_for_update(nowait=True))
@@ -160,7 +169,8 @@ class TestDDLCompilation:
             Column("flag", Integer, server_default=sa.text("1")),
         )
         ddl = CreateTable(t).compile(dialect=AltibaseDialect()).string
-        assert "SERIAL" in ddl
+        assert "INTEGER" in ddl
+        assert "DEFAULT ddl_t_id_SEQ.NEXTVAL" in ddl
         assert "NOT NULL" in ddl
         assert "DEFAULT 1" in ddl
 
