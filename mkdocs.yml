@@ -1,0 +1,66 @@
+site_name: sqlalchemy-pyaltibase
+site_description: "SQLAlchemy 2.0 dialect for the Altibase database"
+site_url: https://yeongseon.github.io/sqlalchemy-pyaltibase/
+repo_url: https://github.com/yeongseon/sqlalchemy-pyaltibase
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - search.highlight
+
+nav:
+  - Home: index.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - tables
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: pymdownx.superfences.fence_div_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+
+plugins:
+  - search
+
+validation:
+  nav:
+    omitted_files: ignore
+  links:
+    not_found: ignore
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yeongseon/sqlalchemy-pyaltibase
+    - icon: simple/pypi
+      link: https://pypi.org/project/sqlalchemy-pyaltibase/
+
+extra_javascript:
+  - https://unpkg.com/mermaid@11/dist/mermaid.min.js
+  - javascripts/mermaid-init.js
