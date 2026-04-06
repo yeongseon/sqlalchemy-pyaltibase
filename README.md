@@ -3,6 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/sqlalchemy-pyaltibase)](https://pypi.org/project/sqlalchemy-pyaltibase)
 [![CI](https://github.com/yeongseon/sqlalchemy-pyaltibase/actions/workflows/ci.yml/badge.svg)](https://github.com/yeongseon/sqlalchemy-pyaltibase/actions/workflows/ci.yml)
 [![license](https://img.shields.io/github/license/yeongseon/sqlalchemy-pyaltibase)](https://github.com/yeongseon/sqlalchemy-pyaltibase/blob/main/LICENSE)
+[![docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://yeongseon.github.io/sqlalchemy-pyaltibase/)
 
 SQLAlchemy 2.0 dialect for the Altibase database, backed by `pyaltibase`.
 
