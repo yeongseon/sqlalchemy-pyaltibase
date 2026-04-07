@@ -1,0 +1,1064 @@
+# sqlalchemy-pyaltibase
+
+SQLAlchemy 2.0 dialect for the Altibase database, backed by `pyaltibase`.
+
+`sqlalchemy-pyaltibase` integrates Altibase with SQLAlchemy Core and ORM workflows, including Altibase-specific SQL compilation, type support, schema reflection, and event-driven autoincrement sequence management.
+
+## Key features
+
+- SQLAlchemy 2.0 dialect implementation for Altibase.
+- Built on top of the `pyaltibase` DB-API driver.
+- Supports SQLAlchemy Core and ORM usage patterns.
+- Lightweight developer workflow with lint and test targets.
+- Altibase-focused type support including `SERIAL`, `BIT`, `VARBIT`, `BYTE`, `VARBYTE`, `NIBBLE`, `GEOMETRY`.
+- Reflection support for tables, views, columns, PK/FK/index metadata, comments, and schemas.
+- Altibase-specific SQL behavior handling such as 1-based `OFFSET` normalization.
+
+## Quick install
+
+```bash
+pip install sqlalchemy-pyaltibase
+```
+
+```bash
+pip install "sqlalchemy-pyaltibase[pyaltibase]"
+```
+
+## Minimal example
+
+```python
+from sqlalchemy import create_engine, text
+engine = create_engine("altibase://user:password@localhost:20300/mydb")
+with engine.connect() as conn:
+    value = conn.execute(text("SELECT 1 FROM DUAL")).scalar()
+    print(value)
+```
+
+## Why this dialect exists
+
+Altibase has behavior and SQL syntax details that differ from other engines. This package adapts SQLAlchemy behavior where needed:
+
+- Autoincrement integer PK columns are sequence-backed and managed through table event listeners.
+- Pagination offsets are compiled as 1-based expressions (`OFFSET (n + 1)`).
+- Dialect-specific type compilation and reflection map Altibase system catalog metadata to SQLAlchemy constructs.
+
+See [Dialect Features](dialect-features.md) and [Limitations](limitations.md) for details.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    app["Application"] --> sa["SQLAlchemy Core/ORM"]
+    sa --> dialect["AltibaseDialect"]
+    dialect --> dbapi["pyaltibase"]
+    dbapi --> server["Altibase Server"]
+```
+
+## Documentation map
+
+- Getting started
+  - [Quick Start](quickstart.md)
+  - [Connection Guide](connection.md)
+- User guide
+  - [Dialect Features](dialect-features.md)
+  - [Type Mapping](types.md)
+  - [Schema Reflection](reflection.md)
+  - [DDL Generation](ddl.md)
+  - [Limitations](limitations.md)
+- Reference
+  - [API Reference](api-reference.md)
+- Contributor docs
+  - [Development Guide](development.md)
+
+## Quick architecture of dialect internals
+
+```mermaid
+flowchart LR
+    A[AltibaseDialect] --> B[AltibaseCompiler]
+    A --> C[AltibaseDDLCompiler]
+    A --> D[AltibaseTypeCompiler]
+    A --> E[AltibaseIdentifierPreparer]
+    A --> F[AltibaseExecutionContext]
+```
+
+## Project links
+
+- GitHub: https://github.com/yeongseon/sqlalchemy-pyaltibase
+- PyPI: https://pypi.org/project/sqlalchemy-pyaltibase/
+
+---
+
+# Quick Start
+
+Get started with `sqlalchemy-pyaltibase` to use Altibase through SQLAlchemy Core or ORM.
+
+## Requirements
+
+!!! note "Before you begin"
+    - Python 3.10+
+    - SQLAlchemy 2.x
+    - Altibase server reachable from your application host
+    - `pyaltibase` driver installed (directly or via extras)
+
+## Install
+
+```bash
+pip install sqlalchemy-pyaltibase
+```
+
+Optional extra to install the DB-API driver with the dialect package:
+
+```bash
+pip install "sqlalchemy-pyaltibase[pyaltibase]"
+```
+
+## Connection URL
+
+Use the Altibase SQLAlchemy URL form:
+
+```text
+altibase://user:pass@host:port/db
+```
+
+Defaults used by the dialect when URL parts are omitted:
+
+- `host`: `localhost`
+- `port`: `20300`
+- `user`: `sys`
+- `database`: empty string (`""`)
+
+## SQLAlchemy Core example
+
+```python
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine, select
+
+engine = create_engine("altibase://sys:password@localhost:20300/mydb")
+metadata = MetaData()
+
+users = Table(
+    "users",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(100), nullable=False),
+)
+
+metadata.create_all(engine)
+
+with engine.begin() as conn:
+    conn.execute(users.insert().values(name="alice"))
+
+with engine.connect() as conn:
+    rows = conn.execute(select(users.c.id, users.c.name)).all()
+    print(rows)
+```
+
+## SQLAlchemy ORM example
+
+```python
+from sqlalchemy import Integer, String, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+
+engine = create_engine("altibase://sys:password@localhost:20300/mydb")
+Base.metadata.create_all(engine)
+
+with Session(engine) as session:
+    session.add(User(name="alice"))
+    session.commit()
+
+with Session(engine) as session:
+    users = session.scalars(select(User)).all()
+    print(users)
+```
+
+## Runtime architecture
+
+```mermaid
+flowchart LR
+    app[Application] --> sa[SQLAlchemy Core/ORM]
+    sa --> dialect[sqlalchemy-pyaltibase\nAltibaseDialect]
+    dialect --> dbapi[pyaltibase DB-API]
+    dbapi --> db[Altibase]
+```
+
+!!! warning "Autoincrement behavior differs from some databases"
+    For autoincrement integer primary keys, this dialect creates and drops implicit sequences via table event listeners. See [Dialect Features](dialect-features.md).
+
+---
+
+# Connection Guide
+
+This page documents connection URL format, dialect defaults, and practical `create_engine()` configuration.
+
+## URL format
+
+```text
+altibase://user:password@host:port/database
+```
+
+You can also pass query parameters recognized by `AltibaseDialect.create_connect_args()`:
+
+- `driver` (default: `ALTIBASE_HDB_ODBC_64bit`)
+- `dsn`
+- `login_timeout` (integer)
+- `nls_use`
+- `long_data_compat` (`true` by default; false for `0|false|no`)
+
+Example:
+
+```text
+altibase://sys:secret@db.example.com:20300/appdb?login_timeout=30&long_data_compat=true
+```
+
+## Dialect defaults
+
+If omitted, these values are used:
+
+| Field | Default |
+|---|---|
+| host | `localhost` |
+| port | `20300` |
+| user | `sys` |
+| password | empty string |
+| database | empty string |
+
+## Basic `create_engine()` usage
+
+```python
+from sqlalchemy import create_engine
+
+engine = create_engine(
+    "altibase://sys:password@localhost:20300/mydb",
+    pool_pre_ping=True,
+)
+```
+
+## Connection pooling
+
+SQLAlchemy pooling options work normally with this dialect.
+
+```python
+from sqlalchemy import create_engine
+
+engine = create_engine(
+    "altibase://sys:password@localhost:20300/mydb",
+    pool_size=10,
+    max_overflow=20,
+    pool_recycle=1800,
+    pool_pre_ping=True,
+)
+```
+
+`pool_pre_ping=True` is recommended for long-running services. The dialect implements `do_ping()` with `SELECT 1 FROM DUAL`.
+
+## Connection lifecycle
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant SA as SQLAlchemy Engine
+    participant D as AltibaseDialect
+    participant P as pyaltibase
+    participant DB as Altibase
+
+    App->>SA: create_engine("altibase://...")
+    SA->>D: create_connect_args(url)
+    D->>P: connect(host, port, user, ...)
+    P->>DB: open session
+    SA->>D: on_connect()
+    D->>DB: set autocommit=False / isolation level
+```
+
+!!! tip "Isolation level at connect time"
+    You can set a dialect-level isolation setting (for example `SERIALIZABLE`) and `on_connect()` applies it after each new DB-API connection is created.
+
+!!! warning "Connection errors"
+    The dialect marks many network/server failures as disconnects by matching known message patterns and common error codes (`-3113`, `-3114`, `-3135`, `-12157`, `-12170`, etc.).
+
+---
+
+# Dialect Features
+
+This dialect (`AltibaseDialect`) includes several Altibase-specific behaviors that are important to understand.
+
+## Core capabilities
+
+- Dialect name: `altibase`
+- Driver name: `pyaltibase`
+- SQLAlchemy paramstyle: `qmark`
+- Sequence support enabled (`supports_sequences=True`)
+- Comments supported (`supports_comments=True`)
+- `RETURNING` is disabled for INSERT/UPDATE/DELETE
+- `postfetch_lastrowid=True`
+
+## Autoincrement via implicit sequences
+
+Altibase autoincrement for integer PK columns is implemented by sequence orchestration, not native identity syntax.
+
+### How it works
+
+1. `autoinc_seq_name(table, column)` builds `<table>_<column>_SEQ`.
+2. `before_create` table event creates sequence:
+   - `CREATE SEQUENCE <seq> START WITH 1 INCREMENT BY 1`
+3. DDL compiler emits autoincrement column as:
+   - `INTEGER DEFAULT <seq>.NEXTVAL`
+4. `after_drop` table event attempts to drop sequence.
+5. Execution context may fetch `CURRVAL` from the sequence for `lastrowid` fallback.
+
+```mermaid
+flowchart TD
+    A[Table has integer autoincrement PK] --> B[before_create event]
+    B --> C[CREATE SEQUENCE table_col_SEQ]
+    C --> D[CREATE TABLE ... DEFAULT table_col_SEQ.NEXTVAL]
+    D --> E[INSERT]
+    E --> F[get_lastrowid fallback: SELECT table_col_SEQ.CURRVAL FROM DUAL]
+    D --> G[after_drop event]
+    G --> H[DROP SEQUENCE table_col_SEQ]
+```
+
+!!! warning "Behavior difference"
+    If your workflow bypasses SQLAlchemy table create/drop events, the implicit sequence may not be created or dropped automatically.
+
+## Isolation levels
+
+Supported isolation levels:
+
+- `READ COMMITTED`
+- `REPEATABLE READ`
+- `SERIALIZABLE`
+
+`set_isolation_level()` validates against this list and executes:
+
+```sql
+SET TRANSACTION ISOLATION LEVEL <LEVEL>
+```
+
+## 1-based OFFSET normalization
+
+Altibase `OFFSET` is 1-based, while SQLAlchemy offset semantics are 0-based.
+
+The statement compiler always emits `(offset + 1)`:
+
+- `.offset(0)` -> `OFFSET (0 + 1)`
+- `.offset(5)` -> `OFFSET (5 + 1)`
+
+Offset-only queries are rewritten as:
+
+```sql
+LIMIT 9223372036854775807 OFFSET (n + 1)
+```
+
+```mermaid
+flowchart LR
+    SA[SQLAlchemy offset: n\n0-based] --> C[AltibaseCompiler.limit_clause]
+    C --> A[Emit OFFSET (n + 1)\n1-based Altibase]
+    C --> B[If no limit: LIMIT 9223372036854775807]
+```
+
+## Identity and sequence handling
+
+- Dialect uses explicit sequence names for autoincrement integer keys.
+- `has_sequence()` checks `SYSTEM_.SYS_SEQUENCES_`.
+- `supports_sequences=True`, `sequences_optional=True`.
+
+!!! note "Server default disables implicit autoincrement sequence logic"
+    If the autoincrement column already has `server_default`, implicit sequence management is skipped.
+
+---
+
+# Type Mapping
+
+`sqlalchemy_altibase.types` provides Altibase-aware SQLAlchemy type classes and compiler mappings.
+
+## Type families
+
+```mermaid
+classDiagram
+    class sqltypes_NUMERIC
+    class sqltypes_FLOAT
+    class sqltypes_INTEGER
+    class sqltypes_String
+    class sqltypes_Text
+    class sqltypes_LargeBinary
+    class sqltypes_DATE
+    class sqltypes_TypeEngine
+
+    class NUMERIC
+    class DECIMAL
+    class FLOAT
+    class REAL
+    class DOUBLE
+    class SMALLINT
+    class INTEGER
+    class BIGINT
+    class SERIAL
+    class VARCHAR
+    class CHAR
+    class NCHAR
+    class NVARCHAR
+    class CLOB
+    class BLOB
+    class DATE
+    class BIT
+    class VARBIT
+    class BYTE
+    class VARBYTE
+    class NIBBLE
+    class GEOMETRY
+
+    sqltypes_NUMERIC <|-- NUMERIC
+    sqltypes_NUMERIC <|-- DECIMAL
+    sqltypes_FLOAT <|-- FLOAT
+    sqltypes_FLOAT <|-- REAL
+    sqltypes_FLOAT <|-- DOUBLE
+    sqltypes_INTEGER <|-- SMALLINT
+    sqltypes_INTEGER <|-- INTEGER
+    sqltypes_INTEGER <|-- BIGINT
+    sqltypes_INTEGER <|-- SERIAL
+    sqltypes_String <|-- VARCHAR
+    sqltypes_String <|-- CHAR
+    sqltypes_String <|-- NCHAR
+    sqltypes_String <|-- NVARCHAR
+    sqltypes_Text <|-- CLOB
+    sqltypes_LargeBinary <|-- BLOB
+    sqltypes_DATE <|-- DATE
+    sqltypes_TypeEngine <|-- BIT
+    sqltypes_TypeEngine <|-- VARBIT
+    sqltypes_LargeBinary <|-- BYTE
+    sqltypes_LargeBinary <|-- VARBYTE
+    sqltypes_TypeEngine <|-- NIBBLE
+    sqltypes_TypeEngine <|-- GEOMETRY
+```
+
+## Complete type list (22 classes)
+
+### Numeric
+
+- `NUMERIC(precision=None, scale=None)`
+- `DECIMAL(precision=None, scale=None)`
+- `FLOAT(precision=None)`
+- `REAL()`
+- `DOUBLE()`
+- `SMALLINT()`
+- `INTEGER()`
+- `BIGINT()`
+- `SERIAL()`
+
+### Character / text
+
+- `VARCHAR(length=None)`
+- `CHAR(length=None)`
+- `NCHAR(length=None)`
+- `NVARCHAR(length=None)`
+- `CLOB()`
+
+### Binary / bit / other Altibase-specific
+
+- `BLOB()`
+- `DATE()`
+- `BIT(length=None)`
+- `VARBIT(length=None)`
+- `BYTE(length=None)`
+- `VARBYTE(length=None)`
+- `NIBBLE(length=None)`
+- `GEOMETRY()`
+
+!!! note "Unique Altibase-oriented types"
+    `SERIAL`, `BIT`, `VARBIT`, `BYTE`, `VARBYTE`, `NIBBLE`, and `GEOMETRY` are central Altibase-focused additions provided by this dialect package.
+
+## `ischema_names` reflection mapping
+
+The dialect maps reflected Altibase type names to SQLAlchemy type classes using `ischema_names`:
+
+| Reflected type name | Mapped class |
+|---|---|
+| NUMERIC | `NUMERIC` |
+| DECIMAL | `DECIMAL` |
+| FLOAT | `FLOAT` |
+| REAL | `REAL` |
+| DOUBLE | `DOUBLE` |
+| SMALLINT | `SMALLINT` |
+| INTEGER | `INTEGER` |
+| INT | `INTEGER` |
+| BIGINT | `BIGINT` |
+| SERIAL | `SERIAL` |
+| VARCHAR | `VARCHAR` |
+| CHAR | `CHAR` |
+| NCHAR | `NCHAR` |
+| NVARCHAR | `NVARCHAR` |
+| CLOB | `CLOB` |
+| BLOB | `BLOB` |
+| DATE | `DATE` |
+| BYTE | `BYTE` |
+| NIBBLE | `NIBBLE` |
+| BIT | `BIT` |
+| VARBIT | `VARBIT` |
+| VARBYTE | `VARBYTE` |
+| GEOMETRY | `GEOMETRY` |
+
+## Type compiler visit methods
+
+`AltibaseTypeCompiler` implements explicit rendering for:
+
+- `visit_BOOLEAN` -> `SMALLINT`
+- `visit_NUMERIC`, `visit_DECIMAL`, `visit_FLOAT` (precision/scale aware)
+- `visit_REAL`, `visit_DOUBLE`, `visit_SMALLINT`, `visit_INTEGER`, `visit_BIGINT`, `visit_SERIAL`
+- `visit_VARCHAR`, `visit_CHAR`, `visit_NCHAR`, `visit_NVARCHAR`
+- `visit_CLOB`, `visit_BLOB`, `visit_DATE`
+- `visit_BIT`, `visit_VARBIT`, `visit_BYTE`, `visit_VARBYTE`, `visit_NIBBLE`, `visit_GEOMETRY`
+- `visit_large_binary` -> `BLOB`
+- `visit_text` -> `CLOB`
+- `visit_datetime` -> `DATE`
+
+## Altibase <-> SQLAlchemy <-> Python mapping
+
+| Altibase Type | SQLAlchemy Type Class (dialect package) | Typical Python value |
+|---|---|---|
+| NUMERIC(p,s) | `NUMERIC` | `decimal.Decimal` |
+| DECIMAL(p,s) | `DECIMAL` | `decimal.Decimal` |
+| FLOAT(p) | `FLOAT` | `float` |
+| REAL | `REAL` | `float` |
+| DOUBLE | `DOUBLE` | `float` |
+| SMALLINT | `SMALLINT` | `int` |
+| INTEGER | `INTEGER` | `int` |
+| BIGINT | `BIGINT` | `int` |
+| SERIAL | `SERIAL` | `int` |
+| VARCHAR(n) | `VARCHAR` | `str` |
+| CHAR(n) | `CHAR` | `str` |
+| NCHAR(n) | `NCHAR` | `str` |
+| NVARCHAR(n) | `NVARCHAR` | `str` |
+| CLOB | `CLOB` | `str` |
+| BLOB | `BLOB` | `bytes` |
+| DATE | `DATE` | `datetime.date` / datetime values from driver |
+| BIT(n) | `BIT` | driver-specific bit representation |
+| VARBIT(n) | `VARBIT` | driver-specific bit representation |
+| BYTE(n) | `BYTE` | `bytes` |
+| VARBYTE(n) | `VARBYTE` | `bytes` |
+| NIBBLE(n) | `NIBBLE` | driver-specific representation |
+| GEOMETRY | `GEOMETRY` | driver-specific geometry object/bytes |
+
+!!! warning "Driver-level value representation"
+    For `BIT`, `VARBIT`, `NIBBLE`, and `GEOMETRY`, exact Python runtime representation depends on `pyaltibase` behavior.
+
+---
+
+# Schema Reflection
+
+`AltibaseDialect` implements reflection queries against Altibase system catalogs (`SYSTEM_.*`).
+
+## Reflection flow
+
+```mermaid
+flowchart TD
+    A[Inspector / MetaData.reflect] --> B[_effective_schema(schema)]
+    B --> C[get_table_names / get_view_names]
+    C --> D[get_columns]
+    D --> E[get_pk_constraint]
+    E --> F[get_foreign_keys]
+    F --> G[get_indexes]
+    G --> H[get_table_comment]
+```
+
+## Catalog and schema handling
+
+- User-facing schema names are normalized to uppercase via `_effective_schema()`.
+- If no schema is passed, dialect queries default schema via:
+  - `SELECT USER_NAME() FROM DUAL`
+- Reflection SQL joins `SYSTEM_.SYS_USERS_` with object catalogs (`SYS_TABLES_`, `SYS_COLUMNS_`, etc.).
+
+## Table and view reflection
+
+- `get_table_names()` returns tables where `TABLE_TYPE = 'T'`
+- `get_view_names()` returns views where `TABLE_TYPE = 'V'`
+- `get_view_definition()` reads `SYSTEM_.SYS_VIEWS_.VIEW_TEXT`
+
+## Column reflection
+
+`get_columns()` returns SQLAlchemy column dictionaries including:
+
+- `name`
+- `type` (resolved by `_resolve_column_type()`)
+- `nullable`
+- `default`
+- `autoincrement` (true when reflected type is `SERIAL`)
+
+Type resolution supports both textual types and integer type codes, with fallback to `NullType` and warning on unknown types.
+
+## Primary key reflection
+
+`get_pk_constraint()` reads `SYS_CONSTRAINTS_` (`CONSTRAINT_TYPE = 3`) and ordered columns from `SYS_CONSTRAINT_COLUMNS_`.
+
+Return shape:
+
+```python
+{"name": "PK_TABLE", "constrained_columns": ["ID"]}
+```
+
+## Foreign key reflection
+
+`get_foreign_keys()`:
+
+1. Collects FK constraints (`CONSTRAINT_TYPE = 0`)
+2. Collects constrained columns in order
+3. Resolves referred table/schema by `REFERENCED_TABLE_ID`
+4. Resolves referred columns from `REFERENCED_INDEX_ID`
+
+Return shape:
+
+```python
+{
+    "name": "FK_ORDERS_USERS",
+    "constrained_columns": ["USER_ID"],
+    "referred_schema": "APP",
+    "referred_table": "USERS",
+    "referred_columns": ["ID"],
+}
+```
+
+## Index reflection
+
+`get_indexes()` returns index dictionaries with:
+
+- `name`
+- `column_names`
+- `unique`
+
+Uniqueness is derived from `IS_UNIQUE` values such as `Y`, `1`, `TRUE`, `UNIQUE`.
+
+## Unique/check/sequence reflection notes
+
+The current dialect exposes:
+
+- `has_sequence(sequence_name, schema=None)` for existence checks
+- `has_index(...)` for index existence
+
+It does **not** currently implement dedicated public reflection methods like:
+
+- `get_unique_constraints()`
+- `get_check_constraints()`
+- `get_sequence_names()`
+
+In practice, unique index metadata is available from `get_indexes()` (`unique=True`).
+
+## Practical reflection example
+
+```python
+from sqlalchemy import create_engine, inspect
+
+engine = create_engine("altibase://sys:password@localhost:20300/mydb")
+insp = inspect(engine)
+
+print(insp.get_schema_names())
+print(insp.get_table_names(schema="APP"))
+print(insp.get_columns("USERS", schema="APP"))
+print(insp.get_pk_constraint("USERS", schema="APP"))
+print(insp.get_foreign_keys("ORDERS", schema="APP"))
+print(insp.get_indexes("USERS", schema="APP"))
+```
+
+---
+
+# DDL Generation
+
+DDL generation is implemented by `AltibaseDDLCompiler` and coordinated with dialect table events.
+
+## CREATE TABLE generation
+
+`get_column_specification()` composes each column definition.
+
+- Non-autoincrement columns:
+  - use `AltibaseTypeCompiler` output
+  - include `DEFAULT ...` when server default exists
+  - include `NOT NULL` when column is not nullable
+- Autoincrement integer primary key columns (without explicit server default):
+  - force type `INTEGER`
+  - generate `DEFAULT <table>_<column>_SEQ.NEXTVAL`
+
+Example generated shape:
+
+```sql
+CREATE TABLE users (
+    id INTEGER DEFAULT users_id_SEQ.NEXTVAL NOT NULL,
+    name VARCHAR(100) NOT NULL
+)
+```
+
+## Comments
+
+The compiler supports table and column comments:
+
+- `visit_set_table_comment`
+- `visit_drop_table_comment`
+- `visit_set_column_comment`
+- `post_create_table` (inline extra statement after CREATE TABLE)
+
+Rendered forms:
+
+```sql
+COMMENT ON TABLE users IS 'table comment'
+COMMENT ON COLUMN users.id IS 'identifier'
+COMMENT ON TABLE users IS ''
+```
+
+## Implicit sequence lifecycle
+
+Autoincrement sequence management is done by table event listeners in `dialect.py`:
+
+- `before_create`: create implicit sequence
+- `after_drop`: drop implicit sequence (errors ignored)
+
+```mermaid
+flowchart TD
+    A[MetaData.create_all] --> B[before_create listener]
+    B --> C[CREATE SEQUENCE table_col_SEQ]
+    C --> D[AltibaseDDLCompiler CREATE TABLE]
+    D --> E[column DEFAULT table_col_SEQ.NEXTVAL]
+    F[MetaData.drop_all] --> G[after_drop listener]
+    G --> H[DROP SEQUENCE table_col_SEQ]
+```
+
+!!! warning "Event-driven sequence creation"
+    If DDL is generated and executed outside SQLAlchemy table events, you must create/drop sequences yourself.
+
+## Example
+
+```python
+from sqlalchemy import Column, Integer, MetaData, String, Table, create_engine
+
+engine = create_engine("altibase://sys:password@localhost:20300/mydb")
+m = MetaData()
+
+users = Table(
+    "users",
+    m,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(100), nullable=False, comment="user name"),
+    comment="application users",
+)
+
+m.create_all(engine)
+```
+
+---
+
+# Limitations and Workarounds
+
+This page summarizes important behavioral differences and known constraints in the current dialect implementation.
+
+## 1-based OFFSET semantics
+
+Altibase offset behavior is 1-based, while SQLAlchemy offset is 0-based. The compiler adjusts automatically using `(offset + 1)`.
+
+```sql
+-- SQLAlchemy offset(0)
+... OFFSET (0 + 1)
+```
+
+Workaround guidance:
+
+- Use standard SQLAlchemy `offset()` calls.
+- Do not manually pre-adjust offsets.
+
+## Autoincrement depends on implicit sequence events
+
+Autoincrement integer PK handling requires SQLAlchemy table lifecycle events:
+
+- Sequence created before table create
+- Sequence dropped after table drop
+
+If you bypass these events, create/drop sequence manually.
+
+## RETURNING is not supported
+
+The dialect sets:
+
+- `insert_returning = False`
+- `update_returning = False`
+- `delete_returning = False`
+
+Workaround guidance:
+
+- Use follow-up `SELECT` queries.
+- For inserted autoincrement IDs, rely on `lastrowid`/CURRVAL fallback behavior provided by execution context.
+
+## Empty INSERT is not supported
+
+`supports_empty_insert = False`.
+
+Workaround guidance:
+
+- Provide explicit column/value pairs.
+- Avoid `INSERT INTO table DEFAULT VALUES` patterns.
+
+## Distinct-from operator not supported
+
+`supports_is_distinct_from = False`.
+
+Workaround guidance:
+
+- Use explicit null-safe predicate logic (`(a != b) OR (a IS NULL AND b IS NOT NULL) ...`) in query construction.
+
+## Behavior comparison
+
+```mermaid
+flowchart LR
+    subgraph Generic SQLAlchemy expectation
+      A1[offset(0) -> OFFSET 0]
+      A2[autoincrement often native identity]
+      A3[RETURNING often available]
+    end
+
+    subgraph Altibase dialect behavior
+      B1[offset(0) -> OFFSET (0 + 1)]
+      B2[autoincrement -> implicit sequence + NEXTVAL]
+      B3[RETURNING disabled]
+    end
+
+    A1 --> B1
+    A2 --> B2
+    A3 --> B3
+```
+
+!!! warning "Plan migrations with these differences"
+    If you are moving from PostgreSQL/MySQL/Oracle dialect assumptions, validate pagination and insert identity workflows explicitly.
+
+---
+
+# API Reference
+
+Reference for the public API surface in `sqlalchemy_altibase`.
+
+## Module exports (`sqlalchemy_altibase.__init__`)
+
+- `AltibaseDialect`
+- All exported type classes: `NUMERIC`, `DECIMAL`, `FLOAT`, `REAL`, `DOUBLE`, `SMALLINT`, `INTEGER`, `BIGINT`, `SERIAL`, `VARCHAR`, `CHAR`, `NCHAR`, `NVARCHAR`, `CLOB`, `BLOB`, `DATE`, `BIT`, `VARBIT`, `BYTE`, `VARBYTE`, `NIBBLE`, `GEOMETRY`
+
+## `AltibaseDialect`
+
+### Core class attributes
+
+- `name = "altibase"`
+- `driver = "pyaltibase"`
+- `default_paramstyle = "qmark"`
+- compiler/preparer/context bindings:
+  - `statement_compiler = AltibaseCompiler`
+  - `ddl_compiler = AltibaseDDLCompiler`
+  - `type_compiler = AltibaseTypeCompiler`
+  - `preparer = AltibaseIdentifierPreparer`
+  - `execution_ctx_cls = AltibaseExecutionContext`
+
+### Important capability flags
+
+- `supports_sequences = True`
+- `supports_comments = True`
+- `supports_empty_insert = False`
+- `insert_returning = False`
+- `update_returning = False`
+- `delete_returning = False`
+- `postfetch_lastrowid = True`
+
+### Public methods
+
+- `import_dbapi()` / `dbapi()`
+- `create_connect_args(url)`
+- `on_connect()`
+- `get_isolation_level(dbapi_conn)`
+- `get_isolation_level_values()`
+- `set_isolation_level(dbapi_conn, level)`
+- `reset_isolation_level(dbapi_conn)`
+- `get_table_names(connection, schema=None, **kw)`
+- `get_view_names(connection, schema=None, **kw)`
+- `get_view_definition(connection, view_name, schema=None, **kw)`
+- `get_columns(connection, table_name, schema=None, **kw)`
+- `get_pk_constraint(connection, table_name, schema=None, **kw)`
+- `get_foreign_keys(connection, table_name, schema=None, **kw)`
+- `get_indexes(connection, table_name, schema=None, **kw)`
+- `get_table_comment(connection, table_name, schema=None, **kw)`
+- `get_schema_names(connection, **kw)`
+- `has_table(connection, table_name, schema=None, **kw)`
+- `has_index(connection, table_name, index_name, schema=None)`
+- `has_sequence(connection, sequence_name, schema=None, **kw)`
+- `is_disconnect(e, connection, cursor)`
+- `do_ping(dbapi_connection)`
+
+### Internal helper methods commonly relevant to contributors
+
+- `_get_server_version_info(connection)`
+- `_get_default_schema_name(connection)`
+- `_effective_schema(connection, schema)`
+- `_row_get(row, key, index, default=None)`
+- `_resolve_column_type(data_type, data_precision, data_scale)`
+- `_extract_error_code(exception)`
+
+## `AltibaseCompiler`
+
+Key SQL compilation methods:
+
+- `visit_sysdate_func()` -> `SYSDATE`
+- `visit_dual_func()` -> `DUAL`
+- `default_from()` -> ` FROM DUAL`
+- `visit_cast()`
+- `render_literal_value()` (escapes backslashes)
+- `get_select_precolumns()` (`DISTINCT` handling)
+- `visit_join()` (`INNER JOIN` / `LEFT OUTER JOIN`)
+- `for_update_clause()` (`FOR UPDATE`, `OF`, `WAIT`, `NOWAIT`)
+- `limit_clause()` (Altibase 1-based `OFFSET` adjustment via `offset + 1`)
+
+## `AltibaseDDLCompiler`
+
+- `get_column_specification()`
+- `post_create_table()`
+- `visit_set_table_comment()`
+- `visit_drop_table_comment()`
+- `visit_set_column_comment()`
+
+Autoincrement columns are compiled as `INTEGER DEFAULT <seq>.NEXTVAL`.
+
+## `AltibaseTypeCompiler`
+
+Implements visit methods for numeric, string, LOB, binary, and Altibase-specific types:
+
+- `visit_BOOLEAN`
+- `visit_NUMERIC`, `visit_DECIMAL`, `visit_FLOAT`, `visit_REAL`, `visit_DOUBLE`
+- `visit_SMALLINT`, `visit_INTEGER`, `visit_BIGINT`, `visit_SERIAL`
+- `visit_VARCHAR`, `visit_CHAR`, `visit_NCHAR`, `visit_NVARCHAR`
+- `visit_CLOB`, `visit_BLOB`, `visit_DATE`
+- `visit_BIT`, `visit_VARBIT`, `visit_BYTE`, `visit_VARBYTE`, `visit_NIBBLE`, `visit_GEOMETRY`
+- fallback affinities: `visit_large_binary`, `visit_text`, `visit_datetime`
+
+## `AltibaseIdentifierPreparer`
+
+- Inherits SQLAlchemy `IdentifierPreparer`
+- Uses Altibase reserved words set (`RESERVED_WORDS`)
+- Helper: `_quote_free_identifiers(*ids)`
+
+## `AltibaseExecutionContext`
+
+- `should_autocommit_text(statement)` using `AUTOCOMMIT_REGEXP`
+- `get_lastrowid()`:
+  1. returns `cursor.lastrowid` if available
+  2. otherwise attempts sequence `CURRVAL` lookup for autoincrement table inserts
+
+## Types API
+
+Public type classes in `sqlalchemy_altibase.types`:
+
+- `NUMERIC`, `DECIMAL`, `FLOAT`, `REAL`, `DOUBLE`
+- `SMALLINT`, `INTEGER`, `BIGINT`, `SERIAL`
+- `VARCHAR`, `CHAR`, `NCHAR`, `NVARCHAR`
+- `CLOB`, `BLOB`, `DATE`
+- `BIT`, `VARBIT`, `BYTE`, `VARBYTE`, `NIBBLE`, `GEOMETRY`
+
+## Event listeners and helpers
+
+- `autoinc_seq_name(table_name, column_name)`
+- `_get_autoinc_column(table)`
+- `@event.listens_for(sa.Table, "before_create")` -> `_create_implicit_sequences`
+- `@event.listens_for(sa.Table, "after_drop")` -> `_drop_implicit_sequences`
+
+## Class relationships
+
+```mermaid
+classDiagram
+    class AltibaseDialect
+    class AltibaseCompiler
+    class AltibaseDDLCompiler
+    class AltibaseTypeCompiler
+    class AltibaseIdentifierPreparer
+    class AltibaseExecutionContext
+
+    AltibaseDialect --> AltibaseCompiler : statement_compiler
+    AltibaseDialect --> AltibaseDDLCompiler : ddl_compiler
+    AltibaseDialect --> AltibaseTypeCompiler : type_compiler
+    AltibaseDialect --> AltibaseIdentifierPreparer : preparer
+    AltibaseDialect --> AltibaseExecutionContext : execution_ctx_cls
+```
+
+---
+
+# Development Guide
+
+This project contains the SQLAlchemy Altibase dialect package (`sqlalchemy_altibase`) plus unit and e2e tests.
+
+## Clone and setup
+
+```bash
+git clone https://github.com/yeongseon/sqlalchemy-pyaltibase.git
+cd sqlalchemy-pyaltibase
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Install development dependencies from `pyproject.toml`:
+
+```bash
+pip install -e .
+pip install -e ".[dev]"
+```
+
+Optional DB-API extra:
+
+```bash
+pip install -e ".[pyaltibase]"
+```
+
+## Running tests
+
+```bash
+pytest
+```
+
+Targeted runs:
+
+```bash
+pytest test/test_types.py
+pytest test/test_base.py
+pytest test/test_compiler.py
+pytest test/test_dialect_offline.py
+```
+
+## Test structure
+
+- `test/test_types.py`: custom type classes and repr/bind behavior
+- `test/test_base.py`: identifier preparer, execution context, autocommit regex
+- `test/test_compiler.py`: SQL/DDL/type compilation behavior (including offset adjustment)
+- `test/test_dialect_offline.py`: dialect flags, connect args, reflection, disconnect detection, event listeners
+- `e2e/`: integration-oriented tests
+
+```mermaid
+flowchart TD
+    A[sqlalchemy_altibase package] --> B[test/test_types.py]
+    A --> C[test/test_base.py]
+    A --> D[test/test_compiler.py]
+    A --> E[test/test_dialect_offline.py]
+    A --> F[e2e/ integration tests]
+```
+
+## Lint and style
+
+Ruff is configured in `pyproject.toml`:
+
+- line length: 100
+- target version: py310
+
+Run linting:
+
+```bash
+ruff check .
+```
+
+## Coverage configuration
+
+- Coverage source: `sqlalchemy_altibase`
+- `fail_under = 95`
