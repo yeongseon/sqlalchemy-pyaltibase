@@ -40,6 +40,9 @@ flowchart TD
 
 Type resolution supports both textual types and integer type codes, with fallback to `NullType` and warning on unknown types.
 
+Column defaults are normalized by `_normalize_default()` which strips vendor-specific quoting
+(e.g., `'value'` → `value`, `NULL` → `None`).
+
 ## Primary key reflection
 
 `get_pk_constraint()` reads `SYS_CONSTRAINTS_` (`CONSTRAINT_TYPE = 3`) and ordered columns from `SYS_CONSTRAINT_COLUMNS_`.

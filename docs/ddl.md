@@ -78,3 +78,23 @@ users = Table(
 
 m.create_all(engine)
 ```
+
+## Alembic Migration Support
+
+This dialect ships with an Alembic `DDLImpl` registered via `alembic.ddl` entry point. After installing
+`sqlalchemy-pyaltibase`, Alembic migrations work automatically.
+
+**Key behavior:** `transactional_ddl = False` — Altibase auto-commits DDL statements, so Alembic will not
+wrap migrations in a transaction.
+
+```ini
+# alembic.ini
+sqlalchemy.url = altibase://sys:password@localhost:20300/mydb
+```
+
+```bash
+alembic upgrade head
+```
+
+!!! note "Install Alembic extra"
+    `pip install "sqlalchemy-pyaltibase[alembic]"` to pull in Alembic as a dependency.

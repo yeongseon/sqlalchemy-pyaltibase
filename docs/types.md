@@ -104,6 +104,7 @@ The dialect maps reflected Altibase type names to SQLAlchemy type classes using 
 
 | Reflected type name | Mapped class |
 |---|---|
+| NUMBER | `NUMERIC` |
 | NUMERIC | `NUMERIC` |
 | DECIMAL | `DECIMAL` |
 | FLOAT | `FLOAT` |
@@ -121,6 +122,7 @@ The dialect maps reflected Altibase type names to SQLAlchemy type classes using 
 | CLOB | `CLOB` |
 | BLOB | `BLOB` |
 | DATE | `DATE` |
+| TIMESTAMP | `DATE` |
 | BYTE | `BYTE` |
 | NIBBLE | `NIBBLE` |
 | BIT | `BIT` |

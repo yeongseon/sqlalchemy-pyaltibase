@@ -84,3 +84,8 @@ flowchart LR
 
 !!! note "Server default disables implicit autoincrement sequence logic"
     If the autoincrement column already has `server_default`, implicit sequence management is skipped.
+
+## Alembic integration
+
+An Alembic `DDLImpl` is registered via the `alembic.ddl` entry point (`altibase`).
+`transactional_ddl = False` because Altibase auto-commits DDL.
