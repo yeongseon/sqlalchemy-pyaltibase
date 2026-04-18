@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from sqlalchemy.sql import sqltypes
 
+from sqlalchemy_altibase.dialect import AltibaseDialect
 from sqlalchemy_altibase.types import (
     BIGINT,
     BIT,
@@ -98,3 +99,15 @@ class TestRepr:
 class TestBindProcessor:
     def test_float_bind_processor_returns_none(self):
         assert FLOAT().bind_processor(None) is None
+
+
+class TestDialectTypeResolution:
+    def test_ischema_name_aliases_map_to_expected_types(self):
+        assert AltibaseDialect.ischema_names["NUMBER"] is NUMERIC
+        assert AltibaseDialect.ischema_names["TIMESTAMP"] is DATE
+
+    def test_resolve_timestamp_variant(self):
+        dialect = AltibaseDialect()
+
+        resolved = dialect._resolve_column_type("TIMESTAMP", None, None)
+        assert isinstance(resolved, DATE)

@@ -13,6 +13,7 @@ from sqlalchemy.engine import url
 from sqlalchemy_altibase.base import AltibaseExecutionContext
 from sqlalchemy_altibase.dialect import (
     AltibaseDialect,
+    _normalize_default,
     _create_implicit_sequences,
     _drop_implicit_sequences,
     _get_autoinc_column,
@@ -176,9 +177,50 @@ class TestReflectionMethods:
             cols = _invoke_reflection(d, "get_columns", conn, "USERS", schema="APP")
         assert cols[0]["name"] == "ID"
         assert cols[0]["nullable"] is False
+        assert cols[0]["default"] is None
         assert cols[1]["type"].length == 100
+        assert cols[1]["default"] == "x"
         assert cols[2]["type"].__class__.__name__ == "NullType"
         warn.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("raw_default", "expected"),
+        [
+            (None, None),
+            ("", None),
+            ("NULL", None),
+            (" SYSDATE ", "SYSDATE"),
+            ("(1)", "1"),
+            ("'hello'", "hello"),
+            ("0", "0"),
+            ("seq_users.NEXTVAL", "seq_users.NEXTVAL"),
+        ],
+    )
+    def test_normalize_default(self, raw_default, expected):
+        assert _normalize_default(raw_default) == expected
+
+    def test_get_columns_normalizes_defaults(self):
+        d = AltibaseDialect()
+        conn = MagicMock()
+        conn.info_cache = {}
+        conn.dialect_options = {}
+        conn.execute.return_value = [
+            ("C1", 9, None, None, "Y", " SYSDATE \n", 1),
+            ("C2", 4, 10, 0, "Y", "(1)", 2),
+            ("C3", 12, 20, None, "Y", "'hello'", 3),
+            ("C4", 12, 20, None, "Y", "NULL", 4),
+            ("C5", 12, 20, None, "Y", "seq_users.NEXTVAL", 5),
+        ]
+
+        cols = _invoke_reflection(d, "get_columns", conn, "USERS", schema="APP")
+
+        assert [col["default"] for col in cols] == [
+            "SYSDATE",
+            "1",
+            "hello",
+            None,
+            "seq_users.NEXTVAL",
+        ]
 
     def test_row_get_and_effective_schema_and_type_resolution_helpers(self):
         d = AltibaseDialect()

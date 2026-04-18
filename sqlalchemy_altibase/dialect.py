@@ -46,6 +46,43 @@ _RE_LENGTH = re.compile(r"\((\d+)\)")
 _RE_PRECISION_SCALE = re.compile(r"\((\d+)(?:\s*,\s*(\d+))?\)")
 _RE_VERSION = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?")
 
+
+def _normalize_default(raw_default):
+    if raw_default is None:
+        return None
+
+    value = str(raw_default).strip()
+    if not value or value.upper() == "NULL":
+        return None
+
+    def _has_wrapping_parentheses(expr):
+        if len(expr) < 2 or expr[0] != "(" or expr[-1] != ")":
+            return False
+
+        depth = 0
+        for index, char in enumerate(expr):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(expr) - 1:
+                    return False
+            if depth < 0:
+                return False
+        return depth == 0
+
+    while _has_wrapping_parentheses(value):
+        value = value[1:-1].strip()
+
+    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+        value = value[1:-1]
+
+    value = value.strip()
+    if not value or value.upper() == "NULL":
+        return None
+    return value
+
+
 colspecs = {
     sqltypes.Numeric: NUMERIC,
     sqltypes.Float: FLOAT,
@@ -53,6 +90,7 @@ colspecs = {
 }
 
 ischema_names = {
+    "NUMBER": NUMERIC,
     "NUMERIC": NUMERIC,
     "DECIMAL": DECIMAL,
     "FLOAT": FLOAT,
@@ -70,6 +108,7 @@ ischema_names = {
     "CLOB": CLOB,
     "BLOB": BLOB,
     "DATE": DATE,
+    "TIMESTAMP": DATE,
     "BYTE": BYTE,
     "NIBBLE": NIBBLE,
     "BIT": BIT,
@@ -340,7 +379,7 @@ class AltibaseDialect(default.DefaultDialect):
                     "name": col_name,
                     "type": coltype,
                     "nullable": nullable,
-                    "default": data_default,
+                    "default": _normalize_default(data_default),
                     "autoincrement": isinstance(coltype, SERIAL),
                 }
             )
