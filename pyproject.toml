@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlalchemy-pyaltibase"
-version = "0.1.1"
+version = "0.2.0"
 description = "Altibase dialect for SQLAlchemy"
 readme = "README.md"
 license = "MIT"
@@ -35,6 +35,7 @@ dependencies = [
 
 [project.optional-dependencies]
 pyaltibase = ["pyaltibase"]
+alembic = ["alembic"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
@@ -49,6 +50,9 @@ Issues = "https://github.com/yeongseon/sqlalchemy-pyaltibase/issues"
 [project.entry-points."sqlalchemy.dialects"]
 altibase = "sqlalchemy_altibase.dialect:AltibaseDialect"
 "altibase.pyaltibase" = "sqlalchemy_altibase.dialect:AltibaseDialect"
+
+[project.entry-points."alembic.ddl"]
+altibase = "sqlalchemy_altibase.alembic_impl:AltibaseImpl"
 
 [tool.setuptools]
 packages = ["sqlalchemy_altibase"]
