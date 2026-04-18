@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added `aioodbc` async dialect (`altibase+aioodbc://`) using SQLAlchemy's built-in `aiodbcConnector` (#12)
+
 ## 0.2.0
 
 - Removed duplicate `get_lastrowid` implementation in `base.py`

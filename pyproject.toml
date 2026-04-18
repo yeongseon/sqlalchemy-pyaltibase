@@ -30,12 +30,13 @@ classifiers = [
     "Topic :: Database :: Front-Ends",
 ]
 dependencies = [
-    "sqlalchemy>=2.0,<2.2",
+    "sqlalchemy>=2.0.23,<2.2",
 ]
 
 [project.optional-dependencies]
 pyaltibase = ["pyaltibase"]
 alembic = ["alembic"]
+aioodbc = ["aioodbc>=0.5.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
@@ -51,6 +52,7 @@ Issues = "https://github.com/yeongseon/sqlalchemy-pyaltibase/issues"
 [project.entry-points."sqlalchemy.dialects"]
 altibase = "sqlalchemy_altibase.dialect:AltibaseDialect"
 "altibase.pyaltibase" = "sqlalchemy_altibase.dialect:AltibaseDialect"
+"altibase.aioodbc" = "sqlalchemy_altibase.aioodbc:AltibaseDialectAsync_aioodbc"
 
 [project.entry-points."alembic.ddl"]
 altibase = "sqlalchemy_altibase.alembic_impl:AltibaseImpl"

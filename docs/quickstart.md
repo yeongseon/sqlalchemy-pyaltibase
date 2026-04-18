@@ -92,6 +92,29 @@ with Session(engine) as session:
     print(users)
 ```
 
+## Async example
+
+Install with async support:
+
+```bash
+pip install "sqlalchemy-pyaltibase[aioodbc]"
+```
+
+```python
+import asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+async def main():
+    engine = create_async_engine("altibase+aioodbc://sys:password@localhost:20300/mydb")
+    async with engine.begin() as conn:
+        result = await conn.execute(text("SELECT 1 FROM DUAL"))
+        print(result.scalar())
+    await engine.dispose()
+
+asyncio.run(main())
+```
+
 ## Runtime architecture
 
 ```mermaid

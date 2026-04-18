@@ -81,6 +81,31 @@ sequenceDiagram
     D->>DB: set autocommit=False / isolation level
 ```
 
+## Async connection (aioodbc)
+
+Install the async extra:
+
+```bash
+pip install "sqlalchemy-pyaltibase[aioodbc]"
+```
+
+Use `create_async_engine` with the `altibase+aioodbc://` URL scheme:
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine
+
+engine = create_async_engine(
+    "altibase+aioodbc://sys:password@localhost:20300/mydb",
+    echo=True,
+)
+
+async with engine.begin() as conn:
+    result = await conn.execute(text("SELECT 1 FROM DUAL"))
+    print(result.scalar())
+```
+
+The async dialect builds an ODBC DSN string internally using the same query parameters as the sync dialect (`driver`, `nls_use`, `long_data_compat`, `login_timeout`).
+
 !!! tip "Isolation level at connect time"
     You can set a dialect-level isolation setting (for example `SERIALIZABLE`) and `on_connect()` applies it after each new DB-API connection is created.
 
