@@ -4,7 +4,7 @@ import pytest
 
 alembic = pytest.importorskip("alembic", reason="alembic not installed")
 
-from sqlalchemy_altibase.alembic_impl import AltibaseImpl
+from sqlalchemy_altibase.alembic_impl import AltibaseImpl  # noqa: E402
 
 
 class TestAltibaseAlembicImpl:
