@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - Added `aioodbc` async dialect (`altibase+aioodbc://`) using SQLAlchemy's built-in `aiodbcConnector` (#12)
 
