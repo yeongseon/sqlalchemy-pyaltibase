@@ -70,6 +70,7 @@ known-first-party = ["sqlalchemy_altibase"]
 
 [tool.coverage.run]
 source = ["sqlalchemy_altibase"]
+omit = ["sqlalchemy_altibase/aioodbc.py"]
 
 [tool.coverage.report]
 show_missing = true
